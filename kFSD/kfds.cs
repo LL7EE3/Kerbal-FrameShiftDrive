@@ -18,23 +18,31 @@ namespace kspFSD
 
         public static bool SUPERCRUISE = false;
         public static bool DROPPING = false;
-        private double supercruiseTargetVel = 0.0d;
+        public static bool GLIDING = false;
 
-        double fsdSpeedMin = 0;
-        double fsdSpeedMax = 0;
-        public static double currentVel = 2500d;
+        static double TGASPEED = 0;
+        static double CURSPEED = 0;
+        static double FSDMAX = 0;
+        static double FSDMIN = 0;
 
         [KSPEvent(groupName = "FSDControls", guiActive = true, active = true, guiActiveEditor = false, guiName = "Toggle Supercruise", guiActiveUnfocused = false)]
 
         public void StopVessel()
         {
             DROPPING = true;
+            GLIDING = false;
+            SUPERCRUISE = false;
+        }
+        public void EngadeGlide()
+        {
+            DROPPING = false;
+            GLIDING = true;
             SUPERCRUISE = false;
         }
         public void toggleSupercruise()
         {
 
-            if (getState()!=MLC)//没有质量锁定时
+            if (getState() != MLC)//没有质量锁定时
             {
                 if (SUPERCRUISE)//刚才正在超巡，准备退出超巡
                 {
@@ -62,9 +70,11 @@ namespace kspFSD
                 {//刚才没有超巡，因此即将进入超巡
                     ScreenMessages.PostScreenMessage("Supercruise Engaged");
                     SetParts(true);
-                    currentVel = vessel.GetObtVelocity().magnitude;
+                    CURSPEED = vessel.GetObtVelocity().magnitude;
                 }
-                SUPERCRUISE = !SUPERCRUISE;//最后切换状态
+                SUPERCRUISE = !SUPERCRUISE;//最后切换状态，这时只应该惯性飞行或超巡
+                GLIDING = false;
+                DROPPING= false;
             }
             else
             {
@@ -78,33 +88,73 @@ namespace kspFSD
             toggleSupercruise();
         }
 
-        int getState()
+        int getState()//fsd速度上下限在这里设置
         {
             CelestialBody mainBody = FlightGlobals.ActiveVessel.mainBody;
-            double radius =mainBody.Radius;
+            double radius = mainBody.Radius;
             double minOrbitalALT = mainBody.minOrbitalDistance;
             double altitute = vessel.altitude;
             double radaraltitute = vessel.radarAltitude;
             double airpressure;
-            if (mainBody.atmosphereDepth>0)
-                airpressure = mainBody.GetPressureAtm(altitute);
-            else
-                airpressure = -1;
 
-            if (radaraltitute <= 1000 || airpressure > 0.05)//质量锁定MLC
+            //不在星球附近时为轨道飞行OC或宇航SC
+            if (radaraltitute > 25000 && altitute <= minOrbitalALT + radius)//轨道飞行高度OC为雷达高度25km至星球直径高度
             {
-                return MLC;
-            }
-            else if (altitute < minOrbitalALT || airpressure > 0.01)//脱离高度DRP
-            {
-                return DRP;
-            }
-            else if (altitute < minOrbitalALT + radius)//轨道飞行高度OC
-            {
+                FSDMIN = 2500 + 27500d  * (altitute - minOrbitalALT)/radius;//这会从30000m/s线性减少到2500m/s
+                FSDMAX = 2500 + Math.Pow(altitute - minOrbitalALT,2)/40404d;//这会在海拔100km时提供250000m/s的最大速度
                 return OC;
             }
-            else//在太空SC
+            else if(altitute> minOrbitalALT+radius)//在太空SC
+            {
+                FSDMIN = 30000d;
+                if (vessel.targetObject != null)
+                {
+                    FSDMAX = //七秒目标距离或20c
+                    Math.Min(Vector3.Distance(vessel.GetTransform().position, vessel.targetObject.GetTransform().position) / 7, 6000000000d);
+                }
+                else
+                    FSDMAX = 6000000000d;//20c
                 return SC;
+            }
+
+            if (mainBody.atmosphereDepth > 0)
+            {//有大气行星
+                airpressure = mainBody.GetPressureAtm(altitute);
+                if (radaraltitute <= 1000 || airpressure > 0.05)//质量锁定MLC条件为雷达高度小于1000m或气压大于0.05atm
+                {
+                    FSDMAX = 0;
+                    FSDMIN = 0;
+                    return MLC;
+                }
+                else if (radaraltitute < 25000 || airpressure >0.01)//脱离DRP条件为雷达高度25km或气压大于0.01atm，进入滑行Glide状态
+                {
+                    FSDMAX = 2500;
+                    FSDMIN = 2500;
+                    GLIDING = true;
+                    return DRP;
+                }
+            }
+            else
+            {//无大气行星
+                if (radaraltitute <= 1000)//质量锁定MLC为雷达高度1km内
+                {
+                    FSDMAX = 0;
+                    FSDMIN = 0;
+                    return MLC;
+                }
+                else if (radaraltitute > 1000 && radaraltitute <= 25000)//脱离高度DRP为25km，滑行Glide至雷达高度1km
+                {
+                    FSDMAX = 2500;
+                    FSDMIN = 2500;
+                    GLIDING = true;
+                    return DRP;
+                }
+            }
+            FSDMIN = 30000d;
+            FSDMAX = 6000000000d;
+            return SC;
+
+
         }
 
         public void SetParts(bool b)
@@ -118,6 +168,9 @@ namespace kspFSD
                 }
             }
         }
+
+            
+
         public void FixedUpdate()
         {
             try
@@ -129,9 +182,8 @@ namespace kspFSD
                 double minOrbitalALT = mainBody.minOrbitalDistance;
                 double altitute = vessel.altitude;
                 double radaraltitute = vessel.radarAltitude;
-                int STATE = getState();
 
-                double currentSpeed;
+
                 if (SUPERCRUISE)
                 {
                     //=================
@@ -140,21 +192,31 @@ namespace kspFSD
                             ScreenMessages.PostScreenMessage("Ready for Disengage");
                     //===================
 
-                    switch (STATE)//fsd速度上下限在这里设置
+                    TGASPEED= Math.Min(FSDMAX, 1000 * (Math.Exp(throttleLevel * 20) - 1) + FSDMIN); //设置目标速度，应该小于限制速度
+                    switch (getState())//在这里设置CURSPEED，稍后会以此调整游戏里飞船速度
                     {
                         case SC:
                             {
-
+                                if (CURSPEED <= TGASPEED)//需要加速
+                                    CURSPEED += Math.Min((TGASPEED - CURSPEED) / 800d, CURSPEED / 800d);//每秒加速度为差值的10%或当前速度的10%中比较小的，这样加速不会太快，同时速度临近时会变慢
+                                else
+                                    CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 400d, CURSPEED / 400d);//同理
                                 break;
                             }
                         case OC:
                             {//轨道飞行速度在这里设置
                                 ScreenMessages.PostScreenMessage("Orbital Flight Engaged");
+                                if (CURSPEED <= TGASPEED)//需要加速
+                                    CURSPEED += Math.Min((TGASPEED - CURSPEED) / 1000d, CURSPEED / 1000d);
+                                else
+                                    CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 600d, CURSPEED / 600d);
                                 break;
                             }
                         case DRP:
                             {//Glide速度在这里设置
                                 ScreenMessages.PostScreenMessage("Glide Engaged, Dropping From Supercruising");
+                                CURSPEED = 2500d;
+                                EngadeGlide();
                                 break;
                             }
                         case MLC:
@@ -168,33 +230,42 @@ namespace kspFSD
                             {
                                 break;
                             }
-
                     }
-                //设置飞船速度
-                if (FlightGlobals.ActiveVessel == vessel)
-                {
-                    FlightGlobals.ActiveVessel.IgnoreGForces(1);
-                    vessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)currentVel, 0.0f)) - vessel.GetObtVelocity());
-                }
-                if (!PauseMenu.isOpen)
-                {
-                    TimeWarp.SetRate(0, true, false);
-                }
                }
                 else if(DROPPING)
                 {
                     {
-                        //在这里把飞船减速到零
+                        CURSPEED -= CURSPEED / 200d;//每秒减少30%
                     }
                     if (vessel.GetObtVelocity().magnitude < 1)
                     {
                         vessel.ChangeWorldVelocity(new Vector3d(0, 0, 0));
                         DROPPING = false;
+                        SetParts(false);//退出超巡，恢复飞船结构
+                    }
+                }
+                else if(GLIDING)
+                {
+                    CURSPEED = 2500d;
+                    if (getState()!=DRP || vessel.GetTransform().eulerAngles.y>0)//降低到MLC退出或仰角大于0，此处欧拉角存疑
+                    {
+                        StopVessel();
                     }
                 }
                 else//在常规空间惯性飞行
                 {
 
+                }
+
+                //设置飞船速度
+                if (FlightGlobals.ActiveVessel == vessel)
+                {
+                    FlightGlobals.ActiveVessel.IgnoreGForces(1);
+                    vessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)CURSPEED, 0.0f)) - vessel.GetObtVelocity());
+                }
+                if (!PauseMenu.isOpen)
+                {
+                    TimeWarp.SetRate(0, true, false);
                 }
             }
             catch (Exception ex)
@@ -232,7 +303,6 @@ namespace kspFSD
                     FlightGlobals.ActiveVessel.SetPosition(deployPosition);
                     FlightGlobals.ActiveVessel.ChangeWorldVelocity(-movementVector);
                     fsdSupercruise.SUPERCRUISE = true;
-                    fsdSupercruise.currentVel = 2500d;
                     foreach (Part part in partsList)
                     {
                         if (part.attachJoint != null)
