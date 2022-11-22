@@ -11,6 +11,11 @@ namespace kspFSD
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public class fsdSupercruise : PartModule
     {
+        const int MLC = -1;
+        const int DRP = 3;
+        const int OC = 5;
+        const int SC = 10;
+
         public static bool SUPERCRUISE = false;
         public static bool DROPPING = false;
         private double supercruiseTargetVel = 0.0d;
@@ -24,30 +29,23 @@ namespace kspFSD
         public void StopVessel()
         {
             DROPPING = true;
+            SUPERCRUISE = false;
         }
         public void toggleSupercruise()
         {
-            Quaternion vesselOrientation = FlightGlobals.ActiveVessel.GetTransform().rotation;
-            List<Part> partsList = FlightGlobals.ActiveVessel.parts;
-            CelestialBody mainBody = FlightGlobals.ActiveVessel.mainBody;
 
-            if (!(FlightGlobals.ActiveVessel.altitude < (mainBody.minOrbitalDistance - mainBody.Radius)))//没有质量锁定时
+            if (getState()!=MLC)//没有质量锁定时
             {
-
-
-                SUPERCRUISE = !SUPERCRUISE;//先切换状态
-                if (!SUPERCRUISE)//刚才正在超巡，准备退出超巡
+                if (SUPERCRUISE)//刚才正在超巡，准备退出超巡
                 {
-                    Vector3 flightVector = FlightGlobals.ActiveVessel.GetObtVelocity();
                     FlightGlobals.ActiveVessel.IgnoreGForces(1);
                     if (vessel.targetObject != null && vessel.targetObject.GetVessel() != null) //如果当前有飞船目标
                     {
-
                         if (Vector3.Distance(vessel.GetTransform().position, vessel.targetObject.GetTransform().position) < 100000d)//100km内目标锁定
                         {
                             ScreenMessages.PostScreenMessage("Destination Lock Engaged");
                             vessel.SetPosition(vessel.targetObject.GetTransform().position + new Vector3(2000, 2000, 2000));//位置放在5km外
-                            FlightGlobals.ActiveVessel.ChangeWorldVelocity(-flightVector);
+                            FlightGlobals.ActiveVessel.ChangeWorldVelocity(-FlightGlobals.ActiveVessel.GetObtVelocity());
                             FlightGlobals.ActiveVessel.ChangeWorldVelocity(vessel.targetObject.GetVessel().GetObtVelocity());  //速度同步
                         }
                     }
@@ -56,28 +54,17 @@ namespace kspFSD
                         ScreenMessages.PostScreenMessage("Dropping From Supercruise");
                         //FlightGlobals.ActiveVessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)previousVelocity, 0.0f)) - flightVector);//原地脱离
                         StopVessel();
+                        return;//提前跳出，停船函数里会切换超巡状态
                     }
-                    foreach (Part part in partsList)
-                        if (part.attachJoint != null)
-                            part.attachJoint.SetUnbreakable(false, false);
-
-
-
+                    SetParts(false);
                 }
-
                 else
                 {//刚才没有超巡，因此即将进入超巡
                     ScreenMessages.PostScreenMessage("Supercruise Engaged");
-                    foreach (Part part in partsList)
-                    {
-                        if (part.attachJoint != null)
-                        {
-                            part.attachJoint.SetUnbreakable(true, true);
-                        }
-                    }
+                    SetParts(true);
                     currentVel = vessel.GetObtVelocity().magnitude;
-                }                
-
+                }
+                SUPERCRUISE = !SUPERCRUISE;//最后切换状态
             }
             else
             {
@@ -91,8 +78,46 @@ namespace kspFSD
             toggleSupercruise();
         }
 
+        int getState()
+        {
+            CelestialBody mainBody = FlightGlobals.ActiveVessel.mainBody;
+            double radius =mainBody.Radius;
+            double minOrbitalALT = mainBody.minOrbitalDistance;
+            double altitute = vessel.altitude;
+            double radaraltitute = vessel.radarAltitude;
+            double airpressure;
+            if (mainBody.atmosphereDepth>0)
+                airpressure = mainBody.GetPressureAtm(altitute);
+            else
+                airpressure = -1;
 
+            if (radaraltitute <= 1000 || airpressure > 0.05)//质量锁定MLC
+            {
+                return MLC;
+            }
+            else if (altitute < minOrbitalALT || airpressure > 0.01)//脱离高度DRP
+            {
+                return DRP;
+            }
+            else if (altitute < minOrbitalALT + radius)//轨道飞行高度OC
+            {
+                return OC;
+            }
+            else//在太空SC
+                return SC;
+        }
 
+        public void SetParts(bool b)
+        {
+            List<Part> partsList = FlightGlobals.ActiveVessel.parts;
+            foreach (Part part in partsList)
+            {
+                if (part.attachJoint != null)
+                {
+                    part.attachJoint.SetUnbreakable(b, b);
+                }
+            }
+        }
         public void FixedUpdate()
         {
             try
@@ -100,113 +125,76 @@ namespace kspFSD
                 Quaternion vesselOrientation = FlightGlobals.ActiveVessel.GetTransform().rotation;
                 float throttleLevel = FlightInputHandler.state.mainThrottle;
                 CelestialBody mainBody = FlightGlobals.ActiveVessel.mainBody;
-                double minCuriseAltitude = mainBody.minOrbitalDistance - mainBody.Radius;
+                double radius = mainBody.Radius;
+                double minOrbitalALT = mainBody.minOrbitalDistance;
+                double altitute = vessel.altitude;
+                double radaraltitute = vessel.radarAltitude;
+                int STATE = getState();
 
+                double currentSpeed;
                 if (SUPERCRUISE)
                 {
-                    if (FlightGlobals.ActiveVessel.altitude < (minCuriseAltitude + 100000.0d))
-                    {
-                        ScreenMessages.PostScreenMessage("Orbital Flight Engaged");
-                    }
-
-                    double graviteFactor = (FlightGlobals.ActiveVessel.altitude - minCuriseAltitude) / 10;
-                    fsdSpeedMin = Math.Min(30000d, minCuriseAltitude / 30 + graviteFactor * 2.7);
-                    fsdSpeedMax = Math.Max(minCuriseAltitude / 10 + graviteFactor * 10, 6000000000d); //20c
-
-
-                    List<Part> partsList = FlightGlobals.ActiveVessel.parts;
-                    if ((FlightGlobals.ActiveVessel.altitude < (minCuriseAltitude) && vessel.obt_speed > 10000))
-                    {
-                        SUPERCRUISE = false;
-                        FlightGlobals.ActiveVessel.IgnoreGForces(1);
-                        FlightGlobals.ActiveVessel.ChangeWorldVelocity(-flightVector);
-
-                        foreach (Part part in partsList)
-                        {
-                            if (part.attachJoint != null)
-                            {
-                                part.attachJoint.SetUnbreakable(false, false);
-                            }
-                        }
-                        ScreenMessages.PostScreenMessage("Emergency Drop: Too Close");
-                    }
-                    else if (FlightGlobals.ActiveVessel.altitude < (minCuriseAltitude))//低速进入滑翔
-                    {
-                        SUPERCRUISE = false;
-                        foreach (Part part in partsList)
-                        {
-                            if (part.attachJoint != null)
-                            {
-                                part.attachJoint.SetUnbreakable(false, false);
-                            }
-                        }
-                        ScreenMessages.PostScreenMessage("Glide Engaged, Dropping From Supercruising");
-                    }
-                    else
-                    {
-                        supercruiseTargetVel = 1000 * (Math.Exp(throttleLevel * 20) - 1) + fsdSpeedMin; //NonLinear
-                        double speedfactor = supercruiseTargetVel / currentVel;
-                        //设置飞船速度上下限
-                        if (currentVel < fsdSpeedMin)
-                            currentVel = currentVel * 1.013;//启动加速
-                        else if (currentVel > fsdSpeedMax)
-                            currentVel = currentVel / 1.016;//重力减速
-                        else
-                        {
-                            if (currentVel < 300000000)//亚光速
-                            {
-                                if (speedfactor > 0.97 || speedfactor < 1.03)
-                                    currentVel = supercruiseTargetVel;
-                                else if ((speedfactor > 1.03) && !PauseMenu.isOpen)
-                                    currentVel = throttleLevel > 0.95 ? currentVel * 1.01 : currentVel * 1.005; 
-                                else if ((speedfactor < 0.97) && !PauseMenu.isOpen)
-                                    currentVel = currentVel / 1.005;
-                            }
-                            else if (currentVel > 300000000 && currentVel < 2400000000)//8倍光速以下
-                            {
-                                if (speedfactor > 0.95 || speedfactor < 1.05)
-                                    currentVel = supercruiseTargetVel;
-                                else if ((speedfactor>1.05) && !PauseMenu.isOpen)
-                                    currentVel = throttleLevel > 0.95 ? currentVel * 1.0014 : currentVel * 1.0007; 
-                                else if ((speedfactor<0.95) && !PauseMenu.isOpen)
-                                    currentVel = currentVel / 1.002;
-                            }
-                            else//8倍光速以上
-                            {
-                                if (speedfactor > 0.93 || speedfactor < 1.07)
-                                    currentVel = supercruiseTargetVel;
-                                else if ((speedfactor>1.07) && !PauseMenu.isOpen)
-                                    currentVel = throttleLevel > 0.95 ? currentVel * 1.0006 : currentVel * 1.0003; 
-                                else if ((speedfactor<0.93) && !PauseMenu.isOpen)
-                                    currentVel = currentVel / 1.001;
-                            }
-                        }
-
-
-
-                        //设置飞船速度
-                        if (FlightGlobals.ActiveVessel == vessel)
-                        {
-                            FlightGlobals.ActiveVessel.IgnoreGForces(1);
-                            vessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)currentVel, 0.0f)) - flightVector);
-                        }
-
-                        if (!PauseMenu.isOpen)
-                        {
-                            TimeWarp.SetRate(0, true, false);
-                        }
-                    }
-
-
+                    //=================
                     if (vessel.targetObject != null && vessel.targetObject.GetVessel() != null)
-                    {
                         if (Vector3.Distance(vessel.GetTransform().position, vessel.targetObject.GetTransform().position) < 100000d)//100km内目标锁定
                             ScreenMessages.PostScreenMessage("Ready for Disengage");
+                    //===================
+
+                    switch (STATE)//fsd速度上下限在这里设置
+                    {
+                        case SC:
+                            {
+
+                                break;
+                            }
+                        case OC:
+                            {//轨道飞行速度在这里设置
+                                ScreenMessages.PostScreenMessage("Orbital Flight Engaged");
+                                break;
+                            }
+                        case DRP:
+                            {//Glide速度在这里设置
+                                ScreenMessages.PostScreenMessage("Glide Engaged, Dropping From Supercruising");
+                                break;
+                            }
+                        case MLC:
+                            {//质量锁定，立即脱离
+                                if (vessel.GetObtVelocity().magnitude > 1000)
+                                    ScreenMessages.PostScreenMessage("Emergency Drop: Too Close");
+                                StopVessel();
+                                break;
+                            }
+                        default:
+                            {
+                                break;
+                            }
+
                     }
+                //设置飞船速度
+                if (FlightGlobals.ActiveVessel == vessel)
+                {
+                    FlightGlobals.ActiveVessel.IgnoreGForces(1);
+                    vessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)currentVel, 0.0f)) - vessel.GetObtVelocity());
                 }
+                if (!PauseMenu.isOpen)
+                {
+                    TimeWarp.SetRate(0, true, false);
+                }
+               }
                 else if(DROPPING)
                 {
-                    //在这里把飞船减速到零
+                    {
+                        //在这里把飞船减速到零
+                    }
+                    if (vessel.GetObtVelocity().magnitude < 1)
+                    {
+                        vessel.ChangeWorldVelocity(new Vector3d(0, 0, 0));
+                        DROPPING = false;
+                    }
+                }
+                else//在常规空间惯性飞行
+                {
+
                 }
             }
             catch (Exception ex)
