@@ -50,7 +50,8 @@ namespace kspFSD
                 ScreenMessages.PostScreenMessage("Glide Failed");
                 return;
             }
-            if (getState() != MLC && getState() != DRP)//没有质量锁定时
+            int sts = getState();
+            if (sts != MLC )//高度在锁定高度以上
             {
                 if (SUPERCRUISING)//刚才正在超巡，准备退出超巡
                 {
@@ -78,8 +79,10 @@ namespace kspFSD
                     ScreenMessages.PostScreenMessage("Supercruise Engaged");
                     SetParts(true);
                     CURSPEED = vessel.GetObtVelocity().magnitude;
-                    if(getState()==DRP)//飞船在脱离高度下
+                    if(sts ==DRP)//飞船在脱离高度下
                     {
+                        GLIDING = false;
+                        DROPPING = false;
                         TAKEOFF = true;
                         return;//提前退出，TAKEOFF是超巡的一种
                     }
@@ -129,10 +132,10 @@ namespace kspFSD
                 {
 
                     FSDMIN = 30000d;
-                    FSDMAX = Math.Min(Math.Exp(30000 + (altitute + 210000) / 25000), 6000000000d);
+                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000), 3000000000d);
                     if (vessel.targetObject != null)
                     {
-                        FSDMAX = //七秒目标距离或20c
+                        FSDMAX = //七秒目标距离或10c
                         Math.Min(Vector3.Distance(vessel.GetTransform().position, vessel.targetObject.GetTransform().position) / 7, FSDMAX);
                     }
 
@@ -173,10 +176,10 @@ namespace kspFSD
                 else if (altitute > minOrbitalALT + radius)//在太空SC
                 {
                     FSDMIN = 30000d;
-                    FSDMAX = Math.Min(Math.Exp(30000 + (altitute + 210000) / 25000),6000000000d);
+                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000), 3000000000d);
                     if (vessel.targetObject != null)
                     {
-                        FSDMAX = //七秒目标距离或20c
+                        FSDMAX = //七秒目标距离或10c
                         Math.Min(Vector3.Distance(vessel.GetTransform().position, vessel.targetObject.GetTransform().position) / 7, FSDMAX);
                     }
 
@@ -290,12 +293,15 @@ namespace kspFSD
                 else if(DROPPING)
                 {
                     {
-                        CURSPEED -= CURSPEED / 30d;//每秒减少很多
+                        CURSPEED -= CURSPEED / 10d;//每秒减少很多
                     }
                     if (vessel.GetObtVelocity().magnitude < 5)
                     {
                         ScreenMessages.PostScreenMessage("Dropped From Supercruise");
-                        vessel.ChangeWorldVelocity(-vessel.GetObtVelocity());
+                        if(vessel.radarAltitude > 1000)
+                            vessel.ChangeWorldVelocity(-vessel.GetObtVelocity());
+                        else
+                            vessel.ChangeWorldVelocity(-vessel.GetSrfVelocity());
                         DROPPING = false;
                         SetParts(false);//退出超巡，恢复飞船结构
                     }
@@ -315,14 +321,20 @@ namespace kspFSD
                 }
                 else if(TAKEOFF)
                 {
-                    ScreenMessages.PostScreenMessage("Taking Off, Pull Up, Don't Sink");
+                    ScreenMessages.PostScreenMessage("Taking Off, Don't Sink");
                     if (CURSPEED <= TGASPEED)//需要加速
                         CURSPEED += Math.Min((TGASPEED - CURSPEED) / 1000d, CURSPEED / 1000d);
                     else
                         CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 600d, CURSPEED / 600d);
 
-                    if (getState() != DRP || vessel.GetTransform().eulerAngles.x < 0)//爬升到OC退出或仰角大于0，此处的欧拉角存疑
+                    if (getState() == OC )//爬升到OC退出或高度下降放弃
                     {
+                        TAKEOFF = false;
+                        SUPERCRUISING = true;
+                    }
+                    else if (vessel.verticalSpeed<0)
+                    {
+                        ScreenMessages.PostScreenMessage("Take Off Canceled");
                         StopVessel();
                     }
                 }
