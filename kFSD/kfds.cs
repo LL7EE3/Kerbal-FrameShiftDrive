@@ -16,9 +16,10 @@ namespace kspFSD
         const int OC = 5;
         const int SC = 10;
 
-        public static bool SUPERCRUISE = false;
+        public static bool SUPERCRUISING = false;
         public static bool DROPPING = false;
         public static bool GLIDING = false;
+        public static bool TAKEOFF = false;
 
         static double TGASPEED = 0;
         static double CURSPEED = 0;
@@ -31,20 +32,22 @@ namespace kspFSD
         {
             DROPPING = true;
             GLIDING = false;
-            SUPERCRUISE = false;
+            SUPERCRUISING = false;
+            TAKEOFF= false;
         }
         public void EngadeGlide()
         {
             DROPPING = false;
             GLIDING = true;
-            SUPERCRUISE = false;
+            SUPERCRUISING = false;
+            TAKEOFF = false;
         }
         public void toggleSupercruise()
         {
 
             if (getState() != MLC)//没有质量锁定时
             {
-                if (SUPERCRUISE)//刚才正在超巡，准备退出超巡
+                if (SUPERCRUISING)//刚才正在超巡，准备退出超巡
                 {
                     FlightGlobals.ActiveVessel.IgnoreGForces(1);
                     if (vessel.targetObject != null && vessel.targetObject.GetVessel() != null) //如果当前有飞船目标
@@ -60,9 +63,8 @@ namespace kspFSD
                     else//没有飞船目标
                     {
                         ScreenMessages.PostScreenMessage("Dropping From Supercruise");
-                        //FlightGlobals.ActiveVessel.ChangeWorldVelocity((vesselOrientation * new Vector3(0.0f, (float)previousVelocity, 0.0f)) - flightVector);//原地脱离
                         StopVessel();
-                        return;//提前跳出，停船函数里会切换超巡状态
+                        return;//提前跳出，需要停船函数里会切换超巡状态
                     }
                     SetParts(false);
                 }
@@ -71,8 +73,13 @@ namespace kspFSD
                     ScreenMessages.PostScreenMessage("Supercruise Engaged");
                     SetParts(true);
                     CURSPEED = vessel.GetObtVelocity().magnitude;
+                    if(getState()==DRP)//飞船在脱离高度下
+                    {
+                        TAKEOFF = true;
+                        return;//提前退出，TAKEOFF是超巡的一种
+                    }
                 }
-                SUPERCRUISE = !SUPERCRUISE;//最后切换状态，这时只应该惯性飞行或超巡
+                SUPERCRUISING = !SUPERCRUISING;//最后切换状态，这时只应该惯性飞行或超巡
                 GLIDING = false;
                 DROPPING= false;
             }
@@ -126,11 +133,20 @@ namespace kspFSD
                     FSDMIN = 0;
                     return MLC;
                 }
-                else if (radaraltitute < 25000 || airpressure >0.01)//脱离DRP条件为雷达高度25km或气压大于0.01atm，进入滑行Glide状态
+                else if (radaraltitute <= 25000 || airpressure >0.01)//脱离DRP条件为雷达高度25km或气压大于0.01atm，进入滑行Glide状态
                 {
-                    FSDMAX = 2500;
-                    FSDMIN = 2500;
-                    GLIDING = true;
+                    if (TAKEOFF)
+                    {
+                        //起飞时速度由高度决定，且不可调
+                        FSDMAX = radaraltitute / 10;
+                        FSDMIN = FSDMAX;
+                    }
+                    else
+                    {
+                        FSDMAX = 2500;
+                        FSDMIN = 2500;
+                        GLIDING = true;
+                    }
                     return DRP;
                 }
             }
@@ -144,9 +160,19 @@ namespace kspFSD
                 }
                 else if (radaraltitute > 1000 && radaraltitute <= 25000)//脱离高度DRP为25km，滑行Glide至雷达高度1km
                 {
-                    FSDMAX = 2500;
-                    FSDMIN = 2500;
-                    GLIDING = true;
+                    if(TAKEOFF)
+                    {
+                        //起飞时速度由高度决定，且不可调
+                        FSDMAX = radaraltitute / 10;
+                        FSDMIN = FSDMAX;
+                    }
+                    else
+                    {
+                        FSDMAX = 2500;
+                        FSDMIN = 2500;
+                        GLIDING = true;
+                    }
+
                     return DRP;
                 }
             }
@@ -184,7 +210,7 @@ namespace kspFSD
                 double radaraltitute = vessel.radarAltitude;
 
 
-                if (SUPERCRUISE)
+                if (SUPERCRUISING)
                 {
                     //=================
                     if (vessel.targetObject != null && vessel.targetObject.GetVessel() != null)
@@ -220,10 +246,15 @@ namespace kspFSD
                                 break;
                             }
                         case MLC:
-                            {//质量锁定，立即脱离
+                            {//质量锁定，脱离
                                 if (vessel.GetObtVelocity().magnitude > 1000)
+                                { 
                                     ScreenMessages.PostScreenMessage("Emergency Drop: Too Close");
-                                StopVessel();
+                                    StopVessel();
+                                }
+                                else
+                                    ScreenMessages.PostScreenMessage("Glide Competed");
+
                                 break;
                             }
                         default:
@@ -235,7 +266,7 @@ namespace kspFSD
                 else if(DROPPING)
                 {
                     {
-                        CURSPEED -= CURSPEED / 200d;//每秒减少30%
+                        CURSPEED -= CURSPEED / 400d;//每秒减少15%
                     }
                     if (vessel.GetObtVelocity().magnitude < 1)
                     {
@@ -246,8 +277,22 @@ namespace kspFSD
                 }
                 else if(GLIDING)
                 {
-                    CURSPEED = 2500d;
-                    if (getState()!=DRP || vessel.GetTransform().eulerAngles.y>0)//降低到MLC退出或仰角大于0，此处欧拉角存疑
+                    //CURSPEED先前设置过
+                    ScreenMessages.PostScreenMessage("Gliding, DO NOT Pull Up");
+                    if (getState()!=DRP || vessel.GetTransform().eulerAngles.x>0)//降低到MLC退出或仰角大于0，此处的欧拉角存疑
+                    {
+                        StopVessel();
+                    }
+                }
+                else if(TAKEOFF)
+                {
+                    ScreenMessages.PostScreenMessage("Taking Off, Pull Up, Don't Sink");
+                    if (CURSPEED <= TGASPEED)//需要加速
+                        CURSPEED += Math.Min((TGASPEED - CURSPEED) / 1000d, CURSPEED / 1000d);
+                    else
+                        CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 600d, CURSPEED / 600d);
+
+                    if (getState() != DRP || vessel.GetTransform().eulerAngles.x < 0)//爬升到OC退出或仰角大于0，此处的欧拉角存疑
                     {
                         StopVessel();
                     }
@@ -302,7 +347,7 @@ namespace kspFSD
                     FlightGlobals.ActiveVessel.IgnoreSpeed(10);
                     FlightGlobals.ActiveVessel.SetPosition(deployPosition);
                     FlightGlobals.ActiveVessel.ChangeWorldVelocity(-movementVector);
-                    fsdSupercruise.SUPERCRUISE = true;
+                    fsdSupercruise.SUPERCRUISING = true;
                     foreach (Part part in partsList)
                     {
                         if (part.attachJoint != null)
