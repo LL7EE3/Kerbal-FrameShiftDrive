@@ -138,13 +138,13 @@ namespace kspFSD
 
                     return SC;
                 }
-                else if (radaraltitute <= 1000 || airpressure >= 0.0025)//脱离超巡条件为雷达高度小于1000m或气压大于0.005atm
+                else if (radaraltitute <= 1000 || airpressure >= 0.001)//脱离超巡条件为雷达高度小于1000m或气压大于0.001atm
                 {
                     FSDMAX = 0;
                     FSDMIN = 0;
                     return MLC;
                 }
-                else if (altitute <= minOrbitalALT && airpressure <0.0025)//滑行条件为进入大气且压力小于0.005atm，进入滑行Glide状态
+                else if (altitute <= minOrbitalALT && airpressure <0.001)//滑行条件为进入大气且压力小于0.001atm，进入滑行Glide状态
                 {
                     if (TAKEOFF)
                     {
@@ -290,7 +290,7 @@ namespace kspFSD
                 else if(DROPPING)
                 {
                     {
-                        CURSPEED -= CURSPEED / 10d;//每秒减少很多
+                        CURSPEED -= CURSPEED / 30d;//每秒减少很多
                     }
                     if (vessel.GetObtVelocity().magnitude < 5)
                     {
