@@ -26,6 +26,8 @@ namespace kspFSD
         static double FSDMAX = 0;
         static double FSDMIN = 0;
 
+        int a = 0;
+
         [KSPEvent(groupName = "FSDControls", guiActive = true, active = true, guiActiveEditor = false, guiName = "Toggle Supercruise", guiActiveUnfocused = false)]
 
         public void StopVessel()
@@ -111,13 +113,28 @@ namespace kspFSD
             double altitute = vessel.altitude;
             double radaraltitute = vessel.radarAltitude;
             double airpressure;
+            double gravity = vessel.precalc.gAccelTrue.magnitude;
 
-            if (altitute < minOrbitalALT + radius && vessel.GetObtVelocity().magnitude > 500000d)//高速冲向星球时直接超巡紧急脱离
+            if (altitute < minOrbitalALT + radius && vessel.GetObtVelocity().magnitude >  (mainBody.atmosphereTemperatureSeaLevel < 1000 ? 500000d : 5000000d))//高速冲向星球时直接超巡紧急脱离
             {
                 ScreenMessages.PostScreenMessage("Emergency Drop: Too Close");
                 return MLC;
             }
+            double FSDgravity = Mathf.Exp(-4 * (float)Math.Sqrt(gravity)) * 9970000 * FlightInputHandler.state.mainThrottle + 30000;
+            if (mainBody.atmosphereTemperatureSeaLevel > 1000)//海平面温度高于1000K视为恒星，需要减小引力影响
+            {
+                FSDgravity=double.MaxValue;
+            }
 
+/*            if (a++ > 60)
+            {
+                Debug.Log("----++---");
+                Debug.Log(FSDgravity);
+                Debug.Log(2500 + Math.Pow(altitute - minOrbitalALT, 2) / 40404d);
+                Debug.Log("---++----");
+                a = 0;
+            }
+*/
             if (mainBody.atmosphereDepth > 0)
             {//有大气行星
                 airpressure = mainBody.GetPressureAtm(altitute);
@@ -125,14 +142,18 @@ namespace kspFSD
                 if (altitute>minOrbitalALT && altitute <= minOrbitalALT + radius)//轨道飞行高度OC为雷达高度25km至星球直径高度
                 {
                     FSDMIN = 2500 + 27500d * (altitute - minOrbitalALT) / radius;//这会从30000m/s线性减少到2500m/s
-                    FSDMAX = 2500 + Math.Pow(altitute - minOrbitalALT, 2) / 40404d;//这会在海拔100km时提供250000m/s的最大速度
+                    FSDMAX = Math.Min(FSDgravity,
+                        2500 + Math.Pow(altitute - minOrbitalALT, 2) / 40404d);//这会在海拔100km时提供250000m/s的最大速度
                     return OC;
                 }
                 else if (altitute > minOrbitalALT + radius)//在太空SC
                 {
 
                     FSDMIN = 30000d;
-                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000), 3000000000d);
+                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000), FSDgravity);//线性的高度速度比例
+                    //由当地重力和星球高度同时控制FSD最大速度，取较小的
+                    if (FSDMAX > 3000000000d)
+                        FSDMAX = 3000000000d;
                     if (vessel.targetObject != null)
                     {
                         FSDMAX = //七秒目标距离或10c
@@ -170,13 +191,17 @@ namespace kspFSD
                 if (radaraltitute > 25000 && altitute <= minOrbitalALT + radius)//轨道飞行高度OC为雷达高度25km至星球直径高度
                 {
                     FSDMIN = 2500 + 27500d * (altitute  - minOrbitalALT) / radius;//这会从30000m/s线性减少到2500m/s
-                    FSDMAX = 2500 + Math.Pow(altitute  - minOrbitalALT, 2) / 40404d;//这会在海拔100km时提供250000m/s的最大速度
+                    FSDMAX = Math.Min(FSDgravity,
+                        2500 + Math.Pow(altitute  - minOrbitalALT, 2) / 40404d);//这会在海拔100km时提供250000m/s的最大速度
                     return OC;
                 }
                 else if (altitute > minOrbitalALT + radius)//在太空SC
                 {
                     FSDMIN = 30000d;
-                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000), 3000000000d);
+                    FSDMAX = Math.Min(Math.Exp(8000 + (altitute + 400000) / 40000),
+                        FSDgravity);
+                    if (FSDMAX > 3000000000d)
+                        FSDMAX = 3000000000d;
                     if (vessel.targetObject != null)
                     {
                         FSDMAX = //七秒目标距离或10c
@@ -232,6 +257,7 @@ namespace kspFSD
 
         public void FixedUpdate()
         {
+
             try
             {
                 Quaternion vesselOrientation = FlightGlobals.ActiveVessel.GetTransform().rotation;
@@ -241,6 +267,7 @@ namespace kspFSD
                 double minOrbitalALT = mainBody.minOrbitalDistance;
                 double altitute = vessel.altitude;
                 double radaraltitute = vessel.radarAltitude;
+
 
                 if (SUPERCRUISING)
                 {
@@ -295,13 +322,13 @@ namespace kspFSD
                     {
                         CURSPEED -= CURSPEED / 10d;//每秒减少很多
                     }
-                    if (vessel.GetObtVelocity().magnitude < 5)
+                    if (vessel.GetObtVelocity().magnitude < 30)
                     {
                         ScreenMessages.PostScreenMessage("Dropped From Supercruise");
                         if(vessel.radarAltitude > 1000)
-                            vessel.ChangeWorldVelocity(-vessel.GetObtVelocity());
+                            vessel.ChangeWorldVelocity(-0.2f* vessel.GetObtVelocity());
                         else
-                            vessel.ChangeWorldVelocity(-vessel.GetSrfVelocity());
+                            vessel.ChangeWorldVelocity(-0.2f*vessel.GetSrfVelocity());
                         DROPPING = false;
                         SetParts(false);//退出超巡，恢复飞船结构
                     }
@@ -322,10 +349,11 @@ namespace kspFSD
                 else if(TAKEOFF)
                 {
                     ScreenMessages.PostScreenMessage("Taking Off, Don't Sink");
+
                     if (CURSPEED <= TGASPEED)//需要加速
-                        CURSPEED += Math.Min((TGASPEED - CURSPEED) / 1000d, CURSPEED / 1000d);
+                        CURSPEED += Math.Min((TGASPEED - CURSPEED) / 100* vessel.precalc.gAccelTrue.magnitude, CURSPEED / 100* vessel.precalc.gAccelTrue.magnitude);
                     else
-                        CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 600d, CURSPEED / 600d);
+                        CURSPEED -= Math.Min((TGASPEED - CURSPEED) / 200d, CURSPEED / 200d);
 
                     if (getState() == OC )//爬升到OC退出或高度下降放弃
                     {
